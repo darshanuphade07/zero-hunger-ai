@@ -100,7 +100,11 @@ class WeatherAgent(BaseAgent):
         h_prob = hourly.get("precipitation_probability", [])
         h_rh = hourly.get("relative_humidity_2m", [])
 
-        for i in range(0, min(len(h_times), 24), 2):
+        # Open-Meteo hourly arrays begin at local midnight, not at the current hour.
+        # Locate the first forecast hour at or after the API current timestamp.
+        current_time = data.get("current", {}).get("time", "")
+        start_hour = next((i for i, t in enumerate(h_times) if t >= current_time[:13] + ":00"), 0)
+        for i in range(start_hour, min(len(h_times), start_hour + 24), 2):
             time_str = h_times[i].split("T")[1][:5] if "T" in h_times[i] else h_times[i]
             hourly_temps.append({
                 "time": time_str,
@@ -109,7 +113,8 @@ class WeatherAgent(BaseAgent):
                 "humidity": h_rh[i] if i < len(h_rh) else current_humidity
             })
 
-        rain_prob_24h = int(forecast_7days[0]["rain_probability_pct"]) if forecast_7days else 15
+        next_24h_probs = [p for p in h_prob[start_hour:start_hour + 24] if p is not None]
+        rain_prob_24h = int(max(next_24h_probs)) if next_24h_probs else (int(forecast_7days[0]["rain_probability_pct"]) if forecast_7days else 15)
         et0_today = float(forecast_7days[0]["et0_mm"]) if forecast_7days else 4.5
 
         # Evaluate spraying suitability
