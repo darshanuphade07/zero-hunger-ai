@@ -1,4 +1,5 @@
 import re
+import logging
 import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -7,6 +8,7 @@ from ..database import get_db
 from ..models import FarmerChatLog
 from ..schemas import ChatMessage, ChatResponse
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["Farmer Chatbot"])
 
 OFFLINE_KNOWLEDGE_BASE = [
@@ -127,8 +129,8 @@ async def chat_with_assistant(
                     source_notes="Powered by Google Gemini with agronomic system prompt.",
                     suggested_followups=["How to prevent this?", "Recommended organic alternative?", "What fertilizer should I apply next?"]
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Gemini chat request failed (%s); using offline fallback", type(exc).__name__)
 
     # 2. Offline Knowledge Base Matching
     for entry in OFFLINE_KNOWLEDGE_BASE:
@@ -164,7 +166,7 @@ async def _query_gemini(prompt: str, crop: str, location: str) -> str:
         "Keep language clear, concise, and structured with bullet points. Add Marathi terms in parentheses where helpful."
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
     payload = {
         "contents": [
             {
@@ -180,11 +182,12 @@ async def _query_gemini(prompt: str, crop: str, location: str) -> str:
     }
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        res = await client.post(url, json=payload)
-        if res.status_code == 200:
-            data = res.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-    return ""
+        res = await client.post(url, json=payload, headers={"x-goog-api-key": settings.GEMINI_API_KEY})
+        if res.status_code != 200:
+            logger.warning("Gemini chat returned HTTP %s; using offline fallback", res.status_code)
+            return ""
+        data = res.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
 def _save_chat_log(db: Session, question: str, answer: str, mode: str):
     try:
