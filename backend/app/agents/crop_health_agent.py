@@ -1,10 +1,13 @@
 import json
+import logging
 import base64
 import httpx
 from typing import Dict, Any, Optional
 from .base_agent import BaseAgent
 from ..config import settings
 from ..data.sample_scans import SAMPLE_CROP_SCANS
+
+logger = logging.getLogger(__name__)
 
 class CropHealthAgent(BaseAgent):
     def __init__(self):
@@ -31,9 +34,8 @@ class CropHealthAgent(BaseAgent):
                 gemini_result = await self._analyze_with_gemini(crop_name, image_base64, mime_type)
                 if gemini_result:
                     return gemini_result
-            except Exception as e:
-                # Log error and fall back cleanly
-                pass
+            except Exception as exc:
+                logger.warning("Gemini crop analysis failed (%s); using demo fallback", type(exc).__name__)
 
         # 3. Default: Fallback to Demo Simulation with explicit disclosure
         preset_key = self._match_crop_to_preset(crop_name)
@@ -90,7 +92,7 @@ class CropHealthAgent(BaseAgent):
             "}"
         )
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
         payload = {
             "contents": [
                 {
@@ -112,7 +114,9 @@ class CropHealthAgent(BaseAgent):
         }
 
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers={"x-goog-api-key": settings.GEMINI_API_KEY})
+            if response.status_code != 200:
+                logger.warning("Gemini crop analysis returned HTTP %s; using demo fallback", response.status_code)
             if response.status_code == 200:
                 res_data = response.json()
                 raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
